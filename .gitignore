@@ -1,0 +1,7 @@
+*.retry
+.vault_pass
+*.pem
+.terraform/
+*.tfstate
+*.tfstate.backup
+terraform.tfvars
