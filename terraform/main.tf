@@ -98,9 +98,13 @@ data "aws_ami" "amazon_linux" {
   }
 }
 
+locals {
+  ami_id = data.aws_ami.amazon_linux.id
+}
+
 resource "aws_instance" "app" {
     count = 2
-    ami = data.aws_ami.amazon_linux.id
+    ami = local.ami_id
     instance_type = "t2.micro"
     subnet_id = aws_subnet.public.id
     vpc_security_group_ids = [ aws_security_group.ec2.id ]
@@ -113,4 +117,40 @@ resource "aws_instance" "app" {
 
 output "instance_public_ips" {
   value = aws_instance.app[*].public_ip
+}
+
+resource "aws_cloudwatch_metric_alarm" "high_cpu" {
+  count = 2
+  alarm_name = "high-cpu-instance-${count.index}"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods = 2
+  metric_name = "CPUUtilization"
+  namespace = "AWS/EC2"
+  period = 120
+  statistic = "Average"
+  threshold = 80
+  alarm_description = "Alarm when CPU exceeds 80%"
+
+  dimensions = {
+    InstanceId = aws_instance.app[count.index].id 
+  }
+}
+
+
+resource "aws_cloudwatch_metric_alarm" "status_check_failed" {
+  count = 2
+  alarm_name = "status-check-failed-instance-${count.index}"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods = 2
+  metric_name = "StatusCheckFailed"
+  namespace = "AWS/EC2"
+  period = 60
+  statistic = "Maximum"
+  threshold = 0
+  alarm_description = "Alarm when instance status check fails"
+
+  dimensions = {
+    InstanceId = aws_instance.app[count.index].id
+  }
+  
 }
