@@ -154,3 +154,47 @@ resource "aws_cloudwatch_metric_alarm" "status_check_failed" {
   }
   
 }
+
+resource "aws_cloudwatch_dashboard" "main" {
+  dashboard_name = "aws-monitoring-pipeline-dashboard"
+
+  dashboard_body = jsonencode({
+    widgets = [
+      {
+        type = "metric"
+        x    =  0
+        y    =  0
+        width = 12
+        height = 6
+        properties = {
+          metrics = [
+            ["AWS/EC2", "CPUUtilization", "InstanceId", aws_instance.app[0].id],
+            ["AWS/EC2", "CPUUtilization", "InstanceId", aws_instance.app[1].id]
+          ]
+          period = 300
+          stat = "Average"
+          region = "us-east-1"
+          title = "CPU Utilization"
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 0
+        width  = 12
+        height = 6
+        properties = {
+          metrics = [
+            ["AWS/EC2", "StatusCheckFailed", "InstanceId", aws_instance.app[0].id],
+            ["AWS/EC2", "StatusCheckFailed", "InstanceId", aws_instance.app[1].id]
+          ]
+          period = 300
+          stat   = "Maximum"
+          region = "us-east-1"
+          title  = "Instance Status Checks"
+        }
+      }
+    ]
+  })
+  
+}
