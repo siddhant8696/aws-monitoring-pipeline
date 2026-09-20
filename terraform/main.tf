@@ -1,3 +1,16 @@
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
+    }
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.4"
+    }
+  }
+}
+
 provider "aws"{
     region="us-east-1"
 }
@@ -197,4 +210,112 @@ resource "aws_cloudwatch_dashboard" "main" {
     ]
   })
   
+}
+
+resource "aws_sns_topic" "alerts" {
+  name = "aws-monitoring-pipeline-alerts" 
+}
+
+resource "aws_sns_topic_subscription" "email" {
+  topic_arn = aws_sns_topic.alerts.arn
+  protocol = "email"
+  endpoint = var.alert_email
+  
+}
+
+resource "aws_iam_role" "lambda_remediation" {
+  name = "aws-monitoring-pipeline-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "lambda_remediation_policy" {
+  name = "aws-monitoring-pipeline-lambda-policy"
+  role = aws_iam_role.lambda_remediation.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["ec2:RebootInstances", "ec2:DescribeInstances"]
+        Resource = "*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = "sns:Publish"
+        Resource = aws_sns_topic.alerts.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "arn:aws:logs:*:*:*"
+      }
+    ]
+  })
+}
+
+data "archive_file" "lambda_zip" {
+  type        = "zip"
+  source_file = "${path.module}/../lambda/remediate.py"
+  output_path = "${path.module}/lambda.zip"
+}
+
+resource "aws_lambda_function" "remediation" {
+  function_name    = "aws-monitoring-pipeline-remediation"
+  filename         = data.archive_file.lambda_zip.output_path
+  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+  handler          = "remediate.lambda_handler"
+  runtime          = "python3.12"
+  role             = aws_iam_role.lambda_remediation.arn
+  timeout          = 30
+
+  environment {
+    variables = {
+      SNS_TOPIC_ARN = aws_sns_topic.alerts.arn
+    }
+  }
+}
+
+resource "aws_cloudwatch_event_rule" "status_check_alarm" {
+  name        = "aws-monitoring-pipeline-status-alarm-rule"
+  description = "Triggers when a status check alarm fires"
+
+  event_pattern = jsonencode({
+    source      = ["aws.cloudwatch"]
+    detail-type = ["CloudWatch Alarm State Change"]
+    detail = {
+      state = {
+        value = ["ALARM"]
+      }
+      alarmName = [
+        "status-check-failed-instance-0",
+        "status-check-failed-instance-1"
+      ]
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "lambda_target" {
+  rule = aws_cloudwatch_event_rule.status_check_alarm.name
+  arn  = aws_lambda_function.remediation.arn
+}
+
+resource "aws_lambda_permission" "allow_eventbridge" {
+  statement_id  = "AllowExecutionFromEventBridge"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.remediation.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.status_check_alarm.arn
 }
